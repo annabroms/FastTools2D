@@ -1,9 +1,11 @@
-MEX=/opt/matlab/r2018a/bin/mex
+#MEX=/usr/local/MATLAB/R2021a/bin/mex
+MEX=/opt/matlab/r2021a_u3/bin/mex
 
 FORTRAN = gfortran
 FFLAGS = -c -fpic -fopenmp -O3 -Wall -largeArrayDims -fdefault-real-8 -fdefault-double-8
 
-MEXLIBDIR = /opt/matlab/r2018a/sys/os/glnxa64
+#MEXLIBDIR = /usr/local/MATLAB/R2021a/sys/os/glnxa64
+MEXLIBDIR = /opt/matlab/r2021a_u3/sys/os/glnxa64
 MEXLIB = -lirc -lsvml -limf -lgfortran -liomp5
 
 OBJS=\

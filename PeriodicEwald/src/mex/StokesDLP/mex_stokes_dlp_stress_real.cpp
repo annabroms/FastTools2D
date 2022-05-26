@@ -6,12 +6,6 @@
 #include "mm_mxmalloc.h"
 #include "ewald_tools.h"
 
-#define pi 3.1415926535897932385
-
-#define _mm_shuf2_pd(__A) (static_cast<__m128d>(__builtin_ia32_shufpd (static_cast<__v2df>(__A), static_cast<__v2df>(__A), 1)))
-
-inline double expint(double x);
-
 void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
     /*List used for translating sources. FF */
     static const int ilist_x[8] = {-1,-1,-1,0,0,1,1,1};
@@ -70,12 +64,12 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
             particle_offsets_src,box_offsets_src,nsources_in_box,
             particle_offsets_tar,box_offsets_tar,ntargets_in_box);
     
-    
     /*16-byte aligned arrays. Required to be compatible with SSE commands. FF*/
     double* psrc_a = static_cast<double*>(_mm_mxMalloc (2*Nsrc*sizeof(double), 16));
     double* ptar_a = static_cast<double*>(_mm_mxMalloc (2*Ntar*sizeof(double), 16));
-    double* S  = static_cast<double*>(_mm_mxMalloc (4*Nsrc*sizeof(double), 16));
-    double* Ts = static_cast<double*>(_mm_mxCalloc (2*Ntar, sizeof(double),16));
+    double* f_a  = static_cast<double*>(_mm_mxMalloc (2*Nsrc*sizeof(double), 16));
+    double* n_a  = static_cast<double*>(_mm_mxMalloc (2*Nsrc*sizeof(double), 16));
+    double* Ts = static_cast<double*>(_mm_mxCalloc (4*Ntar, sizeof(double),16));
     
     /*Write from p to ps and from f to fs, which are compatible with SSE commands. FF*/
     for(int j = 0;j<Nsrc;j++) {
@@ -83,10 +77,11 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
         psrc_a[2*j] = psrc[2*particle_offsets_src[j]];
         psrc_a[2*j+1] = psrc[2*particle_offsets_src[j]+1];
         
-        S[4*j] = f[2*particle_offsets_src[j]]*n[2*particle_offsets_src[j]];
-        S[4*j+1] = f[2*particle_offsets_src[j]]*n[2*particle_offsets_src[j]+1];
-        S[4*j+2] = f[2*particle_offsets_src[j]+1]*n[2*particle_offsets_src[j]];
-        S[4*j+3] = f[2*particle_offsets_src[j]+1]*n[2*particle_offsets_src[j]+1];
+        f_a[2*j] = f[2*particle_offsets_src[j]];
+        f_a[2*j+1] = f[2*particle_offsets_src[j]+1];
+        
+        n_a[2*j] = n[2*particle_offsets_src[j]];
+        n_a[2*j+1] = n[2*particle_offsets_src[j]+1];
         
     }
     
@@ -98,6 +93,8 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
      * box are within the distance sqrt(cutoffsq) of each other. FF*/
     double cutoffsq = len_x*len_y/nside_x/nside_y;
     double xi2 = xi*xi;
+    
+    double mu = 1.0;
 
     /*Loop through boxes*/
 #pragma omp parallel for    
@@ -114,28 +111,46 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
             
             for(int k=sidx;k<sidx+nsources_in_box[current_box];k++) {
                                 
-                double x1 = -(psrc_a[2*k] - ptar_a[2*j]);
-                double x2 = -(psrc_a[2*k+1] - ptar_a[2*j+1]);
+                double r1 = -(psrc_a[2*k] - ptar_a[2*j]);
+                double r2 = -(psrc_a[2*k+1] - ptar_a[2*j+1]);
                 
-                double r2 = x1*x1+x2*x2;
+                double rSq = r1*r1+r2*r2;
                 
-                if(r2 == 0)
+                if(rSq == 0)
                     continue;
           
-                double e2 = exp(-xi2*r2);
-                double prefac = 2*xi2;
-                double facb = -4*(1+xi2*r2)/r2/r2;
-                                
-                double T111 = x1*x1*x1*facb + prefac*3*x1;
-                double T112 = x1*x1*x2*facb + prefac*x2;
-                double T122 = x1*x2*x2*facb + prefac*x1;
+                double e2 = exp(-xi2*rSq);
+                double f1 = f_a[2*k];
+                double f2 = f_a[2*k+1];
+                double n1 = n_a[2*k];
+                double n2 = n_a[2*k+1];
                 
-                Ts[2*j] += e2*(T111*S[4*k] + T112*(S[4*k+1] + S[4*k+2]) + T122*S[4*k+3]);
-                                
-                double T211 = x2*x1*x1*facb + prefac*x2;
-                double T212 = x2*x1*x2*facb + prefac*x1;
-                double T222 = x2*x2*x2*facb + prefac*3*x2;
-                Ts[2*j+1] += e2*(T211*S[4*k] + T212*(S[4*k+1] + S[4*k+2]) + T222*S[4*k+3]);  
+                double rdotf = r1*f1 + r2*f2;
+                double rdotn = r1*n1 + r2*n2;
+                double fdotn = f1*n1 + f2*n2;
+                
+                //j = 1, l = 1
+                Ts[4*j] += e2*(1/(2*pi)*((fdotn-2*xi2*rdotf*rdotn)/rSq-2*rdotf*rdotn/(rSq*rSq))
+                    +1/(4*pi)*2*mu*(r1*r1*rdotf*rdotn*((8*xi2*xi2)/rSq+(16*xi2)/(rSq*rSq)+16/(rSq*rSq*rSq))
+                    -2*(1+xi2*rSq)*(f1*r1*rdotn+n1*r1*rdotf+r1*f1*rdotn+r1*n1*rdotf+2*rdotf*rdotn)/(rSq*rSq)
+                    +2*xi2*(fdotn+n1*f1+f1*n1-xi2*(2*r1*r1*fdotn+r1*f1*rdotn+r1*n1*rdotf+f1*r1*rdotn+n1*r1*rdotf))));
+                        
+                //j = 1, l = 2
+                Ts[4*j+1] += 1/(4*pi)*2*mu*e2*(r1*r2*rdotf*rdotn*((8*xi2*xi2)/rSq+(16*xi2)/(rSq*rSq)+16/(rSq*rSq*rSq))
+                    -2*(1+xi2*rSq)*(f1*r2*rdotn+n1*r2*rdotf+r1*f2*rdotn+r1*n2*rdotf)/(rSq*rSq)
+                    +2*xi2*(n1*f2+f1*n2-xi2*(2*r1*r2*fdotn+r1*f2*rdotn+r1*n2*rdotf+f1*r2*rdotn+n1*r2*rdotf)));
+                
+                //j = 2, l = 1
+                Ts[4*j+2] += 1/(4*pi)*2*mu*e2*(r2*r1*rdotf*rdotn*((8*xi2*xi2)/rSq+(16*xi2)/(rSq*rSq)+16/(rSq*rSq*rSq))
+                    -2*(1+xi2*rSq)*(f2*r1*rdotn+n2*r1*rdotf+r2*f1*rdotn+r2*n1*rdotf)/(rSq*rSq)
+                    +2*xi2*(n2*f1+f2*n1-xi2*(2*r2*r1*fdotn+r2*f1*rdotn+r2*n1*rdotf+f2*r1*rdotn+n2*r1*rdotf)));
+                
+                //j = 2, l = 2
+                Ts[4*j+3] += e2*(1/(2*pi)*((fdotn-2*xi2*rdotf*rdotn)/rSq-2*rdotf*rdotn/(rSq*rSq))
+                    +1/(4*pi)*2*mu*(r2*r2*rdotf*rdotn*((8*xi2*xi2)/rSq+(16*xi2)/(rSq*rSq)+16/(rSq*rSq*rSq))
+                    -2*(1+xi2*rSq)*(f2*r2*rdotn+n2*r2*rdotf+r2*f2*rdotn+r2*n2*rdotf+2*rdotf*rdotn)/(rSq*rSq)
+                    +2*xi2*(fdotn+n2*f2+f2*n2-xi2*(2*r2*r2*fdotn+r2*f2*rdotn+r2*n2*rdotf+f2*r2*rdotn+n2*r2*rdotf))));
+
             }
         }
         
@@ -159,44 +174,66 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
                     
                     int idx = box_offsets_src[source_box];
                     for(int l=0;l<nsources_in_box[source_box];l++,idx++) {
-                        double x1 = -(psrc_a[2*idx]-ptar_a[2*(tidx+k)]+zoff_re);
-                        double x2 = -(psrc_a[2*idx+1]-ptar_a[2*(tidx+k)+1]+zoff_im);
+                        double r1 = -(psrc_a[2*idx]-ptar_a[2*(tidx+k)]+zoff_re);
+                        double r2 = -(psrc_a[2*idx+1]-ptar_a[2*(tidx+k)+1]+zoff_im);
                         
-                        double r2 = x1*x1+x2*x2;
+                        double rSq = r1*r1+r2*r2;
                         
-                        if(r2 < cutoffsq) {
+                        if(rSq < cutoffsq) {
+
+                            double e2 = exp(-xi2*rSq);
+                            double f1 = f_a[2*idx];
+                            double f2 = f_a[2*idx+1];
+                            double n1 = n_a[2*idx];
+                            double n2 = n_a[2*idx+1];
                             
-                            double e2 = exp(-xi2*r2);
-                            double prefac = 2*xi2;
-                            double facb = -4*(1+xi2*r2)/r2/r2;
+                            double rdotf = r1*f1 + r2*f2;
+                            double rdotn = r1*n1 + r2*n2;
+                            double fdotn = f1*n1 + f2*n2;
                             
-                            double T111 = x1*x1*x1*facb + prefac*3*x1;
-                            double T112 = x1*x1*x2*facb + prefac*x2;
-                            double T122 = x1*x2*x2*facb + prefac*x1;
-                            Ts[2*(tidx+k)] += e2*(T111*S[4*idx] + T112*(S[4*idx+1] + S[4*idx+2]) + T122*S[4*idx+3]);
-                            
-                            double T211 = x2*x1*x1*facb + prefac*x2;
-                            double T212 = x2*x1*x2*facb + prefac*x1;
-                            double T222 = x2*x2*x2*facb + prefac*3*x2;
-                            Ts[2*(tidx+k)+1] += e2*(T211*S[4*idx] + T212*(S[4*idx+1] + S[4*idx+2]) + T222*S[4*idx+3]);
+                            //j = 1, l = 1
+                            Ts[4*(tidx+k)] += e2*(1/(2*pi)*((fdotn-2*xi2*rdotf*rdotn)/rSq-2*rdotf*rdotn/(rSq*rSq))
+                                +1/(4*pi)*2*mu*(r1*r1*rdotf*rdotn*((8*xi2*xi2)/rSq+(16*xi2)/(rSq*rSq)+16/(rSq*rSq*rSq))
+                                -2*(1+xi2*rSq)*(f1*r1*rdotn+n1*r1*rdotf+r1*f1*rdotn+r1*n1*rdotf+2*rdotf*rdotn)/(rSq*rSq)
+                                +2*xi2*(fdotn+n1*f1+f1*n1-xi2*(2*r1*r1*fdotn+r1*f1*rdotn+r1*n1*rdotf+f1*r1*rdotn+n1*r1*rdotf))));
+
+                            //j = 1, l = 2
+                            Ts[4*(tidx+k)+1] += 1/(4*pi)*2*mu*e2*(r1*r2*rdotf*rdotn*((8*xi2*xi2)/rSq+(16*xi2)/(rSq*rSq)+16/(rSq*rSq*rSq))
+                                -2*(1+xi2*rSq)*(f1*r2*rdotn+n1*r2*rdotf+r1*f2*rdotn+r1*n2*rdotf)/(rSq*rSq)
+                                +2*xi2*(n1*f2+f1*n2-xi2*(2*r1*r2*fdotn+r1*f2*rdotn+r1*n2*rdotf+f1*r2*rdotn+n1*r2*rdotf)));
+
+                            //j = 2, l = 1
+                            Ts[4*(tidx+k)+2] += 1/(4*pi)*2*mu*e2*(r2*r1*rdotf*rdotn*((8*xi2*xi2)/rSq+(16*xi2)/(rSq*rSq)+16/(rSq*rSq*rSq))
+                                -2*(1+xi2*rSq)*(f2*r1*rdotn+n2*r1*rdotf+r2*f1*rdotn+r2*n1*rdotf)/(rSq*rSq)
+                                +2*xi2*(n2*f1+f2*n1-xi2*(2*r2*r1*fdotn+r2*f1*rdotn+r2*n1*rdotf+f2*r1*rdotn+n2*r1*rdotf)));
+
+                            //j = 2, l = 2
+                            Ts[4*(tidx+k)+3] += e2*(1/(2*pi)*((fdotn-2*xi2*rdotf*rdotn)/rSq-2*rdotf*rdotn/(rSq*rSq))
+                                +1/(4*pi)*2*mu*(r2*r2*rdotf*rdotn*((8*xi2*xi2)/rSq+(16*xi2)/(rSq*rSq)+16/(rSq*rSq*rSq))
+                                -2*(1+xi2*rSq)*(f2*r2*rdotn+n2*r2*rdotf+r2*f2*rdotn+r2*n2*rdotf+2*rdotf*rdotn)/(rSq*rSq)
+                                +2*xi2*(fdotn+n2*f2+f2*n2-xi2*(2*r2*r2*fdotn+r2*f2*rdotn+r2*n2*rdotf+f2*r2*rdotn+n2*r2*rdotf))));
+
                         }
                     }
                 }
-            } 
+            }
         }
     }
     
     _mm_mxFree(psrc_a);
     _mm_mxFree(ptar_a);
-    _mm_mxFree(S);
+    _mm_mxFree(f_a);
+    _mm_mxFree(n_a);
     
-    plhs[0] = mxCreateDoubleMatrix(2, Ntar, mxREAL);
+    plhs[0] = mxCreateDoubleMatrix(4, Ntar, mxREAL);
     
     double* T = mxGetPr(plhs[0]);
-    
+
     for(int j = 0;j<Ntar;j++) {
-        T[2*particle_offsets_tar[j]] = Ts[2*j]/4/pi;
-        T[2*particle_offsets_tar[j]+1] = Ts[2*j+1]/4/pi;
+        T[4*particle_offsets_tar[j]] = Ts[4*j];
+        T[4*particle_offsets_tar[j]+1] = Ts[4*j+1];
+        T[4*particle_offsets_tar[j]+2] = Ts[4*j+2];
+        T[4*particle_offsets_tar[j]+3] = Ts[4*j+3];
     }
     
     _mm_mxFree(Ts);

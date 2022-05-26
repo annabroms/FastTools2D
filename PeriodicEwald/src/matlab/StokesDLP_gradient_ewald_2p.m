@@ -1,5 +1,5 @@
-function [u1, u2, ur, uk, xi] = StokesDLP_ewald_2p(xsrc, ysrc,...
-                    xtar, ytar, n1, n2, f1, f2, Lx, Ly, varargin)
+function [u1, u2, ur, uk, xi] = StokesDLP_gradient_ewald_2p(xsrc, ysrc,...
+                    xtar, ytar, n1, n2, f1, f2, b1, b2, Lx, Ly, varargin)
 % - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 % Spectral Ewald evaluation of the doubly-periodic  double-layer potential.
 %
@@ -12,6 +12,8 @@ function [u1, u2, ur, uk, xi] = StokesDLP_ewald_2p(xsrc, ysrc,...
 %       n2, y component of the normal vector at source points
 %       f1, x component of density function
 %       f2, y component of density function
+%       b1, x component of target direction vector
+%       b2, y component of target_direction vector
 %       Lx, the length of the periodic box in the x direction
 %       Ly, the length of the periodic box in the y direction
 %       vargargin can contain any or all of the following:
@@ -33,7 +35,7 @@ P = 24;
 % average number of points per box for real space sum
 Nb = min(P*round(log2(npts)), npts/4);
 % tolerance, used to get parameters from estimates
-tol = 1e-16;
+tol = 1e-16;  
 % print diagnostic information
 verbose = 0;
 
@@ -61,6 +63,13 @@ if nargin > 8
 end
 
 % TO DO: ADD CHECKS ON INPUT DATA HERE
+zsrc = xsrc + 1i*ysrc;
+ztar = xtar + 1i*ytar;
+
+% Flag target indices that are source points
+I = ismember(zsrc, ztar);
+c = 1:length(zsrc);
+equal_idx = c(I);
 
 %% Fix for matlab 2018/2019, not sure why this is necessary, but it seems 
 % to work. 
@@ -90,7 +99,7 @@ if verbose
     fprintf("Points per box: %d\n", Nb);
 end
 
-% Make sure the sources and targets are all inside the box.
+%  Make sure the sources and targets are all inside the box.
 xsrc = mod(xsrc+Lx/2,Lx)-Lx/2;
 xtar = mod(xtar+Lx/2,Lx)-Lx/2;
 ysrc = mod(ysrc+Ly/2,Ly)-Ly/2;
@@ -137,18 +146,25 @@ if verbose
     tic
 end
 
-ur = mex_stokes_dlp_real(psrc,ptar,f,n,xi,nside_x,nside_y,Lx,Ly);
+ur_tmp = mex_stokes_dlp_gradient_real(psrc,ptar,f,n,xi,nside_x,nside_y,Lx,Ly);
+
+ur = zeros(2,length(xtar));
+ur(1,:) = ur_tmp(1,:).*b1' + ur_tmp(3,:).*b2';
+ur(2,:) = ur_tmp(2,:).*b1' + ur_tmp(4,:).*b2';
 
 if verbose
     fprintf("TIME FOR REAL SUM: %3.3g s\n", toc);
     tic
 end
 
-uk = mex_stokes_dlp_kspace(psrc,ptar,xi,eta,f,n,Mx,My,Lx,Ly,w,P);
+uk_tmp = mex_stokes_dlp_gradient_kspace(psrc,ptar,xi,eta,f,n,Mx,My,Lx,Ly,w,P);
+uk = zeros(2,length(xtar));
+uk(1,:) = uk_tmp(1,:).*b1' + uk_tmp(3,:).*b2';
+uk(2,:) = uk_tmp(2,:).*b1' + uk_tmp(4,:).*b2';
 
-% Add on zero mode
-uk(1,:) = uk(1,:) + sum((f1.*n1 + f2.*n2).*xsrc) / (Lx*Ly);
-uk(2,:) = uk(2,:) + sum((f1.*n1 + f2.*n2).*ysrc) / (Lx*Ly);
+% % Add on zero mode
+% uk(1,:) = uk(1,:) + sum((f1.*n1 + f2.*n2).*xsrc) / (Lx*Ly);
+% uk(2,:) = uk(2,:) + sum((f1.*n1 + f2.*n2).*ysrc) / (Lx*Ly);
 
 if verbose
     fprintf("TIME FOR FOURIER SUM: %3.3g s\n", toc);
@@ -156,6 +172,17 @@ if verbose
 end
 
 u = ur + uk;
+if ~isempty(equal_idx) > 0
+   qsrc_c = f1(equal_idx) + 1i*f2(equal_idx);
+   nsrc_c = n1(equal_idx) + 1i*n2(equal_idx);
+   btar_c = b1 + 1i*b2;
+   
+   uself = xi^2*(qsrc_c.*real(btar_c.*conj(nsrc_c)) + ...
+                nsrc_c.*real(qsrc_c.*conj(btar_c)) +...
+                btar_c.*real(qsrc_c.*conj(nsrc_c)))/(2*pi);
+            
+   u = u + [real(uself)'; imag(uself)'];
+end
 
 u1 = u(1,:)';
 u2 = u(2,:)';

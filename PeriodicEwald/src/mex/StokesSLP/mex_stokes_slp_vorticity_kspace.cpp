@@ -1,8 +1,4 @@
-#include <math.h>
-#include <omp.h>
-#include <string.h>
 #include "ewald_tools.h"
-#define pi 3.1415926535897932385
 
 void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
     
@@ -44,7 +40,7 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
     //Number of support nodes
     int P = static_cast<int>(mxGetScalar(prhs[10]));
     
-    //The grid spacing, assuming hx = hy = h
+    //Grid spacing, assuming hx = hy = h
     double h = Lx/Mx;
     
     //---------------------------------------------------------------------
@@ -58,7 +54,7 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
     //The function H on the grid. We need to have these as Matlab arrays
     //since we call Matlab's in-built fft2 to compute the 2D FFT.
     mxArray *fft2rhs[2],*fft2lhs[2];
-    fft2rhs[0] = mxCreateDoubleMatrix(My, Mx, mxREAL);    
+    fft2rhs[0] = mxCreateDoubleMatrix(My, Mx, mxREAL);
     fft2rhs[1] = mxCreateDoubleMatrix(My, Mx, mxREAL);
     
     double* H1 = mxGetPr(fft2rhs[0]);
@@ -79,28 +75,32 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
     //complex data structure Matlab uses which we now have to deal with.
     mexCallMATLAB(1,&fft2lhs[0],1,&fft2rhs[0],"fft2");
     mexCallMATLAB(1,&fft2lhs[1],1,&fft2rhs[1],"fft2");
-    
+
     //The output of the FFT is complex. Get pointers to the real and
     //imaginary parts of Hhat1 and Hhat2.
-    double* Hhat1_re = mxGetPr(fft2lhs[0]);
-    double* Hhat1_im = mxGetPi(fft2lhs[0]);
-    
-    double* Hhat2_re = mxGetPr(fft2lhs[1]);
-    double* Hhat2_im = mxGetPi(fft2lhs[1]);
     
     mwSize cs = Mx*My;
     
+    double* Hhat1_re = mxGetPr(fft2lhs[0]);
+    double* Hhat1_im = mxGetPi(fft2lhs[0]);    
+    double* Hhat2_re = mxGetPr(fft2lhs[1]);
+    double* Hhat2_im = mxGetPi(fft2lhs[1]);
+    
     //We cannot assume that both the real and imaginary part of the
     //Fourier transforms are non-zero.
-    if(Hhat1_im == NULL) {        
-        Hhat1_im = (double*) mxCalloc(cs,sizeof(double));        
+    if(Hhat1_im == NULL) {
+
+        Hhat1_im = (double*) mxCalloc(cs,sizeof(double));
+        
         mxSetPi(fft2lhs[0],Hhat1_im);
     }
-    if(Hhat2_im == NULL) {        
-        Hhat2_im = (double*) mxCalloc(cs,sizeof(double));        
+    if(Hhat2_im == NULL) {
+
+        Hhat2_im = (double*) mxCalloc(cs,sizeof(double));
+        
         mxSetPi(fft2lhs[1],Hhat2_im);
     }
-    
+   
     //Apply filter in the frequency domain. This is a completely
     //parallel operation. The FFT gives the frequency components in
     //non-sequential order, so we have to split the loops. One could
@@ -120,96 +120,84 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
             
             //Hhat1 contains density component 1 convolved with Gaussians
             //Hhat2 contains density component 2 convolved with Gaussians
-            double q1_re = Hhat1_re[ptr];
-            double q1_im = Hhat1_im[ptr];
-            double q2_re = Hhat2_re[ptr];
-            double q2_im = Hhat2_im[ptr];
+            double f1_re = Hhat1_re[ptr];
+            double f1_im = Hhat1_im[ptr];
+            double f2_re = Hhat2_re[ptr];
+            double f2_im = Hhat2_im[ptr];
             
             double k2 = 2.0*pi/Ly*k;
             double Ksq = k1*k1+k2*k2;
-            double e = (1.0/(Ksq*Ksq)+0.25/(Ksq*xi*xi))*exp(-0.25*(1-eta)/(xi*xi)*Ksq);
+            double e = (1.0/Ksq+0.25/(xi*xi))*exp(-0.25*(1-eta)/(xi*xi)*Ksq);
             
-            double kdotq_re = k1 * q1_re + k2 * q2_re;
-            double kdotq_im = k1 * q1_im + k2 * q2_im;
+            double fdotkperp_re = f1_re*k2 - f2_re*k1;
+            double fdotkperp_im = f1_im*k2 - f2_im*k1;
             
-            Hhat1_re[ptr] = (Ksq*q1_re - k1 * kdotq_re)*e;
-            Hhat1_im[ptr] = (Ksq*q1_im - k1 * kdotq_im)*e;
-            
-            Hhat2_re[ptr] = (Ksq*q2_re - k2 * kdotq_re)*e;
-            Hhat2_im[ptr] = (Ksq*q2_im - k2 * kdotq_im)*e;
+            // multiplication by -i
+            Hhat1_re[ptr] = fdotkperp_im*e;
+            Hhat1_im[ptr] = -fdotkperp_re*e;
         }
         for(int k = 0;k<My/2-1;k++,ptr++) {
             
             //Hhat1 contains density component 1 convolved with Gaussians
             //Hhat2 contains density component 2 convolved with Gaussians
-            double q1_re = Hhat1_re[ptr];
-            double q1_im = Hhat1_im[ptr];
-            double q2_re = Hhat2_re[ptr];
-            double q2_im = Hhat2_im[ptr];
+            double f1_re = Hhat1_re[ptr];
+            double f1_im = Hhat1_im[ptr];
+            double f2_re = Hhat2_re[ptr];
+            double f2_im = Hhat2_im[ptr];
             
             double k2 = 2.0*pi/Ly*(k-My/2+1);
             double Ksq = k1*k1+k2*k2;
-            double e = (1.0/(Ksq*Ksq)+0.25/(Ksq*xi*xi))*exp(-0.25*(1-eta)/(xi*xi)*Ksq);
+            double e = (1.0/Ksq+0.25/(xi*xi))*exp(-0.25*(1-eta)/(xi*xi)*Ksq);
             
-            double kdotq_re = k1 * q1_re + k2 * q2_re;
-            double kdotq_im = k1 * q1_im + k2 * q2_im;
+            double fdotkperp_re = f1_re*k2 - f2_re*k1;
+            double fdotkperp_im = f1_im*k2 - f2_im*k1;
             
-            Hhat1_re[ptr] = (Ksq*q1_re - k1 * kdotq_re)*e;
-            Hhat1_im[ptr] = (Ksq*q1_im - k1 * kdotq_im)*e;
-            
-            Hhat2_re[ptr] = (Ksq*q2_re - k2 * kdotq_re)*e;
-            Hhat2_im[ptr] = (Ksq*q2_im - k2 * kdotq_im)*e;
+            // multiplication by -i
+            Hhat1_re[ptr] = fdotkperp_im*e;
+            Hhat1_im[ptr] = -fdotkperp_re*e;
         }
     }
     
     //Remove the zero frequency term.
     Hhat1_re[0] = 0;
-    Hhat2_re[0] = 0;
     Hhat1_im[0] = 0;
-    Hhat2_im[0] = 0;
     
     //Get rid of the old H1 and H2 arrays. They are no longer needed.
     mxDestroyArray(fft2rhs[0]);
     mxDestroyArray(fft2rhs[1]);
     
     //Do the inverse 2D FFTs. We use Matlab's inbuilt functions again.
+    //Note that we could eliminate one of these IFFTs by noting that 
+    //trace(grad u) = 0, but we'll keep it here for a consistency check
     mexCallMATLAB(1,&fft2rhs[0],1,&fft2lhs[0],"ifft2");
-    mexCallMATLAB(1,&fft2rhs[1],1,&fft2lhs[1],"ifft2");
     
     //The pointer to the real part. We don't need the imaginary part.
     double* Ht1 = mxGetPr(fft2rhs[0]);
-    double* Ht2 = mxGetPr(fft2rhs[1]);
     
     if(Ht1 == NULL) {
         Ht1 = new double[Mx*My];
         memset(Ht1,0,Mx*My*sizeof(double));
     }
-    if(Ht2 == NULL) {
-        Ht2 = new double[Mx*My];
-        memset(Ht2,0,Mx*My*sizeof(double));
-    }
-    
-    //Get rid of the Hhat1 and Hhat2 arrays. They are no longer needed.
+
+    //Get rid of the Hhat arrays. They are no longer needed.
     mxDestroyArray(fft2lhs[0]);
     mxDestroyArray(fft2lhs[1]);
     
     //---------------------------------------------------------------------
-    //Step 3 : Evaluating the velocity
+    //Step 3 : Evaluating the vorticity
     //---------------------------------------------------------------------
-    //Here we compute the output velocity as a convolution of the Ht1
+    //Here we compute the output pressure as a convolution of the Ht1
     //and Ht2 functions with a properly scaled gaussian. This is basically
     //gaussian blur, and we again use fast gaussian gridding. This
     //procedure is fully parallel.
     
     //Create the output matrix.
-    plhs[0] = mxCreateDoubleMatrix(2, Ntar, mxREAL);
-    double* uk = mxGetPr(plhs[0]);
+    plhs[0] = mxCreateDoubleMatrix(1, Ntar, mxREAL);
+    double* omega = mxGetPr(plhs[0]);
     
-    Gather(Ht1, 2, 1, e1, ptar, uk, Ntar, Lx, Ly, xi, w, eta, P, Mx,My, h);
-    Gather(Ht2, 2, 2, e1, ptar, uk, Ntar, Lx, Ly, xi, w, eta, P, Mx,My, h); 
-    
+    Gather(Ht1, 1, 1, e1, ptar, omega, Ntar, Lx, Ly, xi, w, eta, P, Mx,My, h);
+        
     //Clean up
     mxDestroyArray(fft2rhs[0]);
-    mxDestroyArray(fft2rhs[1]);
     delete e1;
 }

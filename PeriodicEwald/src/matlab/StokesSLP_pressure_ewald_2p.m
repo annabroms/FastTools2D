@@ -1,28 +1,26 @@
-function [u1, u2, ur, uk, xi] = StokesDLP_ewald_2p(xsrc, ysrc,...
-                    xtar, ytar, n1, n2, f1, f2, Lx, Ly, varargin)
+function [p, pr, pk, xi] = StokesSLP_pressure_ewald_2p(xsrc, ysrc,...
+            xtar, ytar, f1, f2, Lx, Ly, varargin)
 % - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-% Spectral Ewald evaluation of the doubly-periodic  double-layer potential.
+% Spectral Ewald evaluation of the doubly-periodic Stokeslet.
 %
 % Input:
 %       xsrc, x component of source points
 %       ysrc, y component of source points 
 %       xtar, x component of target points
 %       ytar, y component of target points 
-%       n1, x component of the normal vector at source points
-%       n2, y component of the normal vector at source points
 %       f1, x component of density function
 %       f2, y component of density function
 %       Lx, the length of the periodic box in the x direction
 %       Ly, the length of the periodic box in the y direction
-%       vargargin can contain any or all of the following:
 %         'P', integer giving support points in each direction (default 24)
 %         'Nb', average number of points per box (default P*log2(#pts))
 %         'tol', error tolerance for truncation of sums (default 1e-16)
 %         'verbose', flag to write out parameter information
 % Output:
-%       u1, x component of velocity
-%       u2, y component of velocity
-%
+%       p, pressure
+%       pr, real component of Ewald decomposition (as a 1xN matrix)
+%       pr, Fourier component of Ewald decomposition (as a 1xN matrix)
+%       xi, Ewald parameter
 % - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 npts = length(xsrc)+length(xtar);
@@ -33,7 +31,7 @@ P = 24;
 % average number of points per box for real space sum
 Nb = min(P*round(log2(npts)), npts/4);
 % tolerance, used to get parameters from estimates
-tol = 1e-16;
+tol = 1e-16;  
 % print diagnostic information
 verbose = 0;
 
@@ -62,27 +60,9 @@ end
 
 % TO DO: ADD CHECKS ON INPUT DATA HERE
 
-%% Fix for matlab 2018/2019, not sure why this is necessary, but it seems 
-% to work. 
-%
-% Check to see first if it's necessary, for Matlab 2017a at least it isn't.
-v=ver('MATLAB');
-if v.Release~="(R2017a)"
-    offset = 1e-60;
-    n1 = n1 - offset;
-    if n1 < -1
-        n1 = n1 + 2*offset;
-    end
-    n2 = sqrt(1 - n1.^2).*sign(n2);
-    
-    f1 = f1 + offset;
-    f2 = f2 + offset;
-end
-%%
-
 if verbose
     fprintf("*********************************************************\n");
-    fprintf("SPECTRAL EWALD FOR THE STOKES DOUBLE-LAYER POTENTIAL\n\n")
+    fprintf("SPECTRAL EWALD FOR THE STOKES SINGLE-LAYER POTENTIAL\n\n")
     fprintf("NUMBER OF SOURCES: %d\n", length(xsrc));
     fprintf("NUMBER OF TARGETS: %d\n", length(xtar));
     fprintf("TOLERANCE: %3.3e\n", tol);
@@ -99,12 +79,10 @@ ytar = mod(ytar+Ly/2,Ly)-Ly/2;
 psrc = [xsrc';ysrc'];
 ptar = [xtar';ytar'];
 f = [f1';f2'];
-n = [n1';n2'];
 
 % compute parameters, rc, xi and kinf
 [A,B] = rat(Lx/Ly);
 
-npts = length(psrc)+length(ptar);
 Q = sum(sum(f.^2))+1;
 a = ceil(sqrt(npts/(Nb*A*B)));
 
@@ -137,30 +115,27 @@ if verbose
     tic
 end
 
-ur = mex_stokes_dlp_real(psrc,ptar,f,n,xi,nside_x,nside_y,Lx,Ly);
+pr = mex_stokes_slp_pressure_real(psrc,ptar,f,xi,nside_x,nside_y,Lx,Ly);
 
 if verbose
     fprintf("TIME FOR REAL SUM: %3.3g s\n", toc);
     tic
 end
 
-uk = mex_stokes_dlp_kspace(psrc,ptar,xi,eta,f,n,Mx,My,Lx,Ly,w,P);
+pk = mex_stokes_slp_pressure_kspace(psrc,ptar,f,xi,eta,Mx,My,Lx,Ly,w,P);
 
 % Add on zero mode
-uk(1,:) = uk(1,:) + sum((f1.*n1 + f2.*n2).*xsrc) / (Lx*Ly);
-uk(2,:) = uk(2,:) + sum((f1.*n1 + f2.*n2).*ysrc) / (Lx*Ly);
+pk = pk + -sum((f1.*xsrc + f2.*ysrc)) / (2*Lx*Ly);
 
 if verbose
     fprintf("TIME FOR FOURIER SUM: %3.3g s\n", toc);
     fprintf("*********************************************************\n\n");
 end
 
-u = ur + uk;
-
-u1 = u(1,:)';
-u2 = u(2,:)';
+p = pr + pk;
 
 end
+
 
 %% Computing error estimates. Estimates come from Pålsson and Tornberg 2019 
 % https://arxiv.org/pdf/1909.12581.pdf
@@ -174,14 +149,14 @@ function k = find_kinfb(Q,Lx,Ly,xi,tol)
 k = round(5*xi);       % Initial guess
 maxit = 1e2; it = 0;
 
-f = @(k) sqrt(k*8*pi*Q*max(Lx,Ly)/Lx^3*Ly^3)*exp(-k^2/(4*xi^2)) - tol;
-fp = @(k) sqrt(8*pi*Q*max(Lx,Ly)/Lx^3*Ly^3)*exp(-k^2/(4*xi^2))*...
-            (0.5*k^(-1/2) - 2*k^(3/2)/(4*xi^2));
+f = @(k) sqrt(4*Q*pi*max(Lx,Ly)/(Lx^3*Ly^3*k))*exp(-k^2/(4*xi^2)) - tol;
+fp = @(k) -sqrt(4*Q*pi*max(Lx,Ly)/(Lx^3*Ly^3))*exp(-k^2/(4*xi^2))*...
+                (0.5*k^(-1.5) + sqrt(1/k)*2*k/(4*xi^2));
 
 %kdiff = 1;
 while abs(f(k)) > tol
     if it > maxit
-        warning('SEStresslet:find_kinfb','Max nbr of iterations reached');
+        disp("Couldn't find suitable k! Break")
         break;
     end
     
@@ -202,16 +177,18 @@ end
 function x = find_xi(Q,Lx,Ly,rc,tol)
 
 % Find xi using a Newton iteration
-x = 1/rc;       % Initial guess
+x = 4/rc;       % Initial guess
 maxit = 1e2; it = 0;
+
+% estimates from paper
+f = @(x) sqrt(Q * pi/(4*Lx*Ly*x))*exp(-x^2*rc^2) - tol;
+fp = @(x) -sqrt(Q*pi/(4*Lx*Ly))*exp(-x^2*rc^2)*(0.5*x^(-1.5)+...
+                2*rc^2*x*sqrt(1/x));
+
 %xdiff = 1;
-
-f = @(a) exp(-a^2*rc^2)*a*rc*sqrt(2*pi*Q/(Lx*Ly)) - tol;
-fp = @(a) (1 - 2*a^2*rc^2)*exp(-a^2*rc^2)*sqrt(2*pi*Q/(Lx*Ly))*rc;
-
 while abs(f(x)) > tol
     if it > maxit
-        warning('SEStresslet:find_xi','Max nbr of iterations reached');
+        disp("Couldn't find suitable xi! Break")
         break;
     end
     

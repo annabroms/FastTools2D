@@ -47,13 +47,13 @@
         0.0865197248079397976498L,1L,
     };
 
-
+/*
 void Assign(double *psrc, double *ptar, double len_x, double len_y, int nsrc, 
         int ntar, int nside_x, int nside_y,
         int* particle_offsets_src,int* box_offsets_src,int* nsources_in_box,
         int* particle_offsets_tar,int* box_offsets_tar,int* ntargets_in_box);
 
-inline double expint(double x);
+inline double expint(double x);*/
 
 void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
 
@@ -158,7 +158,7 @@ for(int current_box = 0;current_box<num_boxes;current_box++) {
             /*Store (x1-x2)^2 + (y1-y2)^2 as r2. FF*/
             _mm_storeh_pd(&r2,_mm_hadd_pd(tt,tt));
             
-            if(r2 == 0) {                
+            if(fabs(r2) < 1e-15) {   
                 us[2*j] += self*fs[2*k];
                 us[2*j+1] += self*fs[2*k+1];
             }else{

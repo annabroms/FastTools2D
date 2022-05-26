@@ -1,7 +1,7 @@
-function [u1, u2, ur, uk, xi] = StokesDLP_ewald_2p(xsrc, ysrc,...
-                    xtar, ytar, n1, n2, f1, f2, Lx, Ly, varargin)
+function [sigma1, sigma2, sigmar, sigmak, xi] = StokesDLP_stress_ewald_2p(xsrc, ysrc,...
+                    xtar, ytar, n1, n2, f1, f2, b1, b2, Lx, Ly, varargin)
 % - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-% Spectral Ewald evaluation of the doubly-periodic  double-layer potential.
+% Spectral Ewald evaluation of the doubly-periodic double-layer potential.
 %
 % Input:
 %       xsrc, x component of source points
@@ -12,6 +12,8 @@ function [u1, u2, ur, uk, xi] = StokesDLP_ewald_2p(xsrc, ysrc,...
 %       n2, y component of the normal vector at source points
 %       f1, x component of density function
 %       f2, y component of density function
+%       b1, x component of target direction vector
+%       b2, y component of target_direction vector
 %       Lx, the length of the periodic box in the x direction
 %       Ly, the length of the periodic box in the y direction
 %       vargargin can contain any or all of the following:
@@ -20,9 +22,11 @@ function [u1, u2, ur, uk, xi] = StokesDLP_ewald_2p(xsrc, ysrc,...
 %         'tol', error tolerance for truncation of sums (default 1e-16)
 %         'verbose', flag to write out parameter information
 % Output:
-%       u1, x component of velocity
-%       u2, y component of velocity
-%
+%       sigma1, x component of stress
+%       sigma2, y component of stress
+%       sigmar, real component of Ewald decomposition (as a 2xN matrix)
+%       sigmar, Fourier component of Ewald decomposition (as a 2xN matrix)
+%       xi, Ewald parameter
 % - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 npts = length(xsrc)+length(xtar);
@@ -33,7 +37,7 @@ P = 24;
 % average number of points per box for real space sum
 Nb = min(P*round(log2(npts)), npts/4);
 % tolerance, used to get parameters from estimates
-tol = 1e-16;
+tol = 1e-16;  
 % print diagnostic information
 verbose = 0;
 
@@ -61,6 +65,13 @@ if nargin > 8
 end
 
 % TO DO: ADD CHECKS ON INPUT DATA HERE
+zsrc = xsrc + 1i*ysrc;
+ztar = xtar + 1i*ytar;
+
+% Flag target indices that are source points
+I = ismember(zsrc, ztar);
+c = 1:length(zsrc);
+equal_idx = c(I);
 
 %% Fix for matlab 2018/2019, not sure why this is necessary, but it seems 
 % to work. 
@@ -90,7 +101,7 @@ if verbose
     fprintf("Points per box: %d\n", Nb);
 end
 
-% Make sure the sources and targets are all inside the box.
+%  Make sure the sources and targets are all inside the box.
 xsrc = mod(xsrc+Lx/2,Lx)-Lx/2;
 xtar = mod(xtar+Lx/2,Lx)-Lx/2;
 ysrc = mod(ysrc+Ly/2,Ly)-Ly/2;
@@ -137,28 +148,55 @@ if verbose
     tic
 end
 
-ur = mex_stokes_dlp_real(psrc,ptar,f,n,xi,nside_x,nside_y,Lx,Ly);
+sigmar_tmp = mex_stokes_dlp_stress_real(psrc,ptar,f,n,xi,nside_x,nside_y,Lx,Ly);
+
+sigmar = zeros(2,length(xtar));
+sigmar(1,:) = sigmar_tmp(1,:).*b1' + sigmar_tmp(2,:).*b2';
+sigmar(2,:) = sigmar_tmp(3,:).*b1' + sigmar_tmp(4,:).*b2';
 
 if verbose
     fprintf("TIME FOR REAL SUM: %3.3g s\n", toc);
     tic
 end
 
-uk = mex_stokes_dlp_kspace(psrc,ptar,xi,eta,f,n,Mx,My,Lx,Ly,w,P);
+sigmak_tmp = mex_stokes_dlp_stress_kspace(psrc,ptar,xi,eta,f,n,Mx,My,Lx,Ly,w,P);
 
-% Add on zero mode
-uk(1,:) = uk(1,:) + sum((f1.*n1 + f2.*n2).*xsrc) / (Lx*Ly);
-uk(2,:) = uk(2,:) + sum((f1.*n1 + f2.*n2).*ysrc) / (Lx*Ly);
+sigmak = zeros(2,length(xtar));
+sigmak(1,:) = sigmak_tmp(1,:).*b1' + sigmak_tmp(3,:).*b2';
+sigmak(2,:) = sigmak_tmp(2,:).*b1' + sigmak_tmp(4,:).*b2';
+
+% add on zero mode (from pressure)
+zero_mode = sum((n1.*f1 + n2.*f2))/(2*Lx*Ly);  % zero mode is zero, atleast for the pipe flow
+sigmak = sigmak + zero_mode;
 
 if verbose
     fprintf("TIME FOR FOURIER SUM: %3.3g s\n", toc);
     fprintf("*********************************************************\n\n");
 end
 
-u = ur + uk;
+sigma = sigmar + sigmak;
 
-u1 = u(1,:)';
-u2 = u(2,:)';
+% add on self-contribution
+if ~isempty(equal_idx) > 0
+    qsrc_c = f1(equal_idx) + 1i*f2(equal_idx);
+    nsrc_c = n1(equal_idx) + 1i*n2(equal_idx);
+    btar_c = b1 + 1i*b2;
+
+    % velocity gradient
+    ugradself = xi^2*(qsrc_c.*real(btar_c.*conj(nsrc_c)) + ...
+        nsrc_c.*real(qsrc_c.*conj(btar_c)) + ...
+        btar_c.*real(qsrc_c.*conj(nsrc_c)))/(2*pi);
+
+    % pressure
+    pself = xi^2*btar_c.*real(qsrc_c.*conj(nsrc_c))/(2*pi);
+    
+    % stress
+    sigmaself = -[pself'; zeros(1,length(xtar))] + 2*[real(ugradself)'; imag(ugradself)'];
+    sigma = sigma + sigmaself;
+end
+
+sigma1 = sigma(1,:)';
+sigma2 = sigma(2,:)';
 
 end
 

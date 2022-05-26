@@ -1,7 +1,8 @@
-function [u1, u2, ur, uk, xi] = StokesDLP_ewald_2p(xsrc, ysrc,...
+function [p,  pr, pk, xi] = StokesDLP_pressure_grad_ewald_2p(xsrc, ysrc,...
                     xtar, ytar, n1, n2, f1, f2, Lx, Ly, varargin)
 % - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-% Spectral Ewald evaluation of the doubly-periodic  double-layer potential.
+% Spectral Ewald evaluation of the doubly-periodic pressure of the
+% double-layer potential.
 %
 % Input:
 %       xsrc, x component of source points
@@ -20,8 +21,7 @@ function [u1, u2, ur, uk, xi] = StokesDLP_ewald_2p(xsrc, ysrc,...
 %         'tol', error tolerance for truncation of sums (default 1e-16)
 %         'verbose', flag to write out parameter information
 % Output:
-%       u1, x component of velocity
-%       u2, y component of velocity
+%       p, pressure
 %
 % - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
@@ -33,7 +33,7 @@ P = 24;
 % average number of points per box for real space sum
 Nb = min(P*round(log2(npts)), npts/4);
 % tolerance, used to get parameters from estimates
-tol = 1e-16;
+tol = 1e-16;  
 % print diagnostic information
 verbose = 0;
 
@@ -90,14 +90,14 @@ if verbose
     fprintf("Points per box: %d\n", Nb);
 end
 
-% Make sure the sources and targets are all inside the box.
-xsrc = mod(xsrc+Lx/2,Lx)-Lx/2;
-xtar = mod(xtar+Lx/2,Lx)-Lx/2;
-ysrc = mod(ysrc+Ly/2,Ly)-Ly/2;
-ytar = mod(ytar+Ly/2,Ly)-Ly/2;
+%  Make sure the sources and targets are all inside the box.
+xsrc_ref = mod(xsrc+Lx/2,Lx)-Lx/2;
+xtar_ref = mod(xtar+Lx/2,Lx)-Lx/2;
+ysrc_ref = mod(ysrc+Ly/2,Ly)-Ly/2;
+ytar_ref = mod(ytar+Ly/2,Ly)-Ly/2;
 
-psrc = [xsrc';ysrc'];
-ptar = [xtar';ytar'];
+psrc = [xsrc_ref';ysrc_ref'];
+ptar = [xtar_ref';ytar_ref'];
 f = [f1';f2'];
 n = [n1';n2'];
 
@@ -137,28 +137,21 @@ if verbose
     tic
 end
 
-ur = mex_stokes_dlp_real(psrc,ptar,f,n,xi,nside_x,nside_y,Lx,Ly);
+pr = mex_stokes_dlp_pressure_grad_real(psrc,ptar,f,n,xi,nside_x,nside_y,Lx,Ly);
 
 if verbose
     fprintf("TIME FOR REAL SUM: %3.3g s\n", toc);
     tic
 end
 
-uk = mex_stokes_dlp_kspace(psrc,ptar,xi,eta,f,n,Mx,My,Lx,Ly,w,P);
-
-% Add on zero mode
-uk(1,:) = uk(1,:) + sum((f1.*n1 + f2.*n2).*xsrc) / (Lx*Ly);
-uk(2,:) = uk(2,:) + sum((f1.*n1 + f2.*n2).*ysrc) / (Lx*Ly);
+pk = mex_stokes_dlp_pressure_grad_kspace(psrc,ptar,f,n,xi,eta,Mx,My,Lx,Ly,w,P);
 
 if verbose
     fprintf("TIME FOR FOURIER SUM: %3.3g s\n", toc);
     fprintf("*********************************************************\n\n");
 end
 
-u = ur + uk;
-
-u1 = u(1,:)';
-u2 = u(2,:)';
+p = -2*(pr + pk); 
 
 end
 

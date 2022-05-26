@@ -1,4 +1,4 @@
-function uk = stokes_dlp_kspace_ds(xsrc, ysrc, xtar, ytar,...
+function uk = stokes_dlp_pressure_grad_kspace_ds(xsrc, ysrc, xtar, ytar,...
                         n1, n2, f1, f2, Lx, Ly, xi, kinf)
 % - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 % Evaluates the real space sum of the Stokeslet directly. Considers one
@@ -49,9 +49,9 @@ for n = 1:Nsrc
                     continue
                 end
                 
-                [tmp_x, tmp_y] = stokes_dlp_k_sum(k1, k2, n1(n), n2(n), f1(n), f2(n), xi);
-                uk1_tmp(m) = uk1_tmp(m) + tmp_x*exp(-1i*(k1*r1+k2*r2));
-                uk2_tmp(m) = uk2_tmp(m) + tmp_y*exp(-1i*(k1*r1+k2*r2));
+                [tmp_x, tmp_y] = stokes_dlp_pressure_grad_k_sum(k1, k2, n1(n), n2(n), f1(n), f2(n), xi);
+                uk1_tmp(m) = uk1_tmp(m) + tmp_x*exp(1i*(k1*r1+k2*r2));
+                uk2_tmp(m) = uk2_tmp(m) + tmp_y*exp(1i*(k1*r1+k2*r2));
                 
             end
         end
@@ -64,24 +64,17 @@ end
 
 uk = real([uk1; uk2]) / (Lx*Ly);
 
-% Add on zero mode
-uk(1,:) = uk(1,:) - sum((f1.*n1 + f2.*n2).*xsrc) / (Lx*Ly);
-uk(2,:) = uk(2,:) - sum((f1.*n1 + f2.*n2).*ysrc) / (Lx*Ly);
-
 end
 
-function [uk1, uk2] = stokes_dlp_k_sum(k1, k2, n1, n2, f1, f2, xi)
+function [uk1, uk2] = stokes_dlp_pressure_grad_k_sum(k1, k2, n1, n2, f1, f2, xi)
 
     kdotf = k1*f1 + k2*f2;
     kdotn = k1*n1 + k2*n2;
-    fdotn = f1*n1 + f2*n2;
     
     k = sqrt(k1^2 + k2^2);
     
-    uk1 = 1i*(f1*kdotn + n1*kdotf + k1*fdotn -...
-            2*k1*kdotn*kdotf/k^2)*(1+k^2/(4*xi^2))*exp(-k^2/(4*xi^2))/k^2;
-    uk2 = 1i*(f2*kdotn + n2*kdotf + k2*fdotn -...
-            2*k2*kdotn*kdotf/k^2)*(1+k^2/(4*xi^2))*exp(-k^2/(4*xi^2))/k^2;
+    uk1 = -1i*k1*kdotn*kdotf*exp(-k^2/(4*xi^2))/k^2;
+    uk2 = -1i*k2*kdotn*kdotf*exp(-k^2/(4*xi^2))/k^2;
 end
 
 

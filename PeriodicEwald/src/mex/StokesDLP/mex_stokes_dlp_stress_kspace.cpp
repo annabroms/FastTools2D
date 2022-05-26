@@ -1,11 +1,4 @@
-#include "mex.h"
-#include <math.h>
-#include <omp.h>
-#include <string.h>
 #include "ewald_tools.h"
-
-#define pi 3.1415926535897932385
-
 
 void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
     
@@ -52,8 +45,10 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
     //The width of the Gaussian bell curves on the grid.
     int P = static_cast<int>(mxGetScalar(prhs[11]));
     
-    //The grid spacing
+    //Grid spacing, assuming hx = hy = h
     double h = Lx/Mx;
+    
+    double mu = 1.0;
     
     //---------------------------------------------------------------------
     //Step 1 : Spreading to the grid
@@ -67,12 +62,13 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
     //since we call Matlab's in-built fft2 to compute the 2D FFT.
     mxArray *fft2rhs[4],*fft2lhs[4];
     fft2rhs[0] = mxCreateDoubleMatrix(My, Mx, mxREAL);
-    double* H1 = mxGetPr(fft2rhs[0]);
     fft2rhs[1] = mxCreateDoubleMatrix(My, Mx, mxREAL);
-    double* H2 = mxGetPr(fft2rhs[1]);
     fft2rhs[2] = mxCreateDoubleMatrix(My, Mx, mxREAL);
-    double* H3 = mxGetPr(fft2rhs[2]);
     fft2rhs[3] = mxCreateDoubleMatrix(My, Mx, mxREAL);
+    
+    double* H1 = mxGetPr(fft2rhs[0]);    
+    double* H2 = mxGetPr(fft2rhs[1]);    
+    double* H3 = mxGetPr(fft2rhs[2]);    
     double* H4 = mxGetPr(fft2rhs[3]);
     
     //Have to multiply components of f and n before speading
@@ -83,7 +79,7 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
         v1[2*i] = f[2*i]*n[2*i];          //f1 * n1
         v1[2*i + 1] = f[2*i+1]*n[2*i];    //f2 * n1
         v2[2*i] = f[2*i]*n[2*i+1];        //f1 * n2
-        v2[2*i + 1] = f[2*i+1]*n[2*i+1];  //n2 * n2
+        v2[2*i + 1] = f[2*i+1]*n[2*i+1];  //f2 * n2
     }
     
     //This is the precomputable part of the fast Gaussian gridding.
@@ -122,7 +118,6 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
     //We cannot assume that the imaginary parts of the
     //Fourier transforms are non-zero. Let Matlab take care of the
     //memory management.
-    int alloc3=0,alloc4=0;
     mwSize cs = Mx*My;
     
     if(Hhat1_im == NULL) {
@@ -133,13 +128,15 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
         Hhat2_im = (double*) mxCalloc(cs,sizeof(double));
         mxSetPi(fft2lhs[1],Hhat2_im);
     }
+    
     if(Hhat3_im == NULL) {
         Hhat3_im = new double[Mx*My];
         mxSetPi(fft2lhs[2],Hhat3_im);
     }
+    
     if(Hhat4_im == NULL) {
         Hhat4_im = new double[Mx*My];
-        mxSetPi(fft2lhs[3],Hhat4_im);;
+        mxSetPi(fft2lhs[3],Hhat4_im);
     }
     
     //Apply filter in the frequency domain. This is a completely
@@ -161,7 +158,7 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
             double k2 = 2.0*pi/Ly*k;
             double Ksq = k1*k1+k2*k2;
             
-            double e = exp(-Ksq*(1-eta)/(4*xi*xi))*(1 + Ksq/(4*xi*xi))/Ksq;
+            double e = exp(-Ksq*(1-eta)/(4*xi*xi));
             
             double f1n1_re = Hhat1_re[ptr];
             double f1n1_im = Hhat1_im[ptr];
@@ -171,30 +168,49 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
             double f2n1_im = Hhat3_im[ptr];
             double f2n2_re = Hhat4_re[ptr];
             double f2n2_im = Hhat4_im[ptr];
+
+            //j = 1, l = 1
+            Hhat1_re[ptr] = e*((k1*k1*f1n1_re+k1*k2*f1n2_re+k2*k1*f2n1_re+k2*k2*f2n2_re)/Ksq
+                -mu*(1/Ksq+0.25/(xi*xi))*(2*k1*k1*(f1n1_re+f2n2_re)+k1*(k1*f1n1_re+k2*f1n2_re)
+                +k1*(k1*f1n1_re+k2*f2n1_re)+k1*(k1*f1n1_re+k2*f1n2_re)+k1*(k1*f1n1_re+k2*f2n1_re)
+                -4*k1*k1*(k1*k1*f1n1_re+k1*k2*f1n2_re+k2*k1*f2n1_re+k2*k2*f2n2_re)/Ksq));
+            Hhat1_im[ptr] = e*((k1*k1*f1n1_im+k1*k2*f1n2_im+k2*k1*f2n1_im+k2*k2*f2n2_im)/Ksq
+                -mu*(1/Ksq+0.25/(xi*xi))*(2*k1*k1*(f1n1_im+f2n2_im)+k1*(k1*f1n1_im+k2*f1n2_im)
+                +k1*(k1*f1n1_im+k2*f2n1_im)+k1*(k1*f1n1_im+k2*f1n2_im)+k1*(k1*f1n1_im+k2*f2n1_im)
+                -4*k1*k1*(k1*k1*f1n1_im+k1*k2*f1n2_im+k2*k1*f2n1_im+k2*k2*f2n2_im)/Ksq));
             
-            Hhat1_re[ptr] = -(2*f1n1_im*k1 + k2*(f1n2_im + f2n1_im) 
-                                + k1*(f1n1_im + f2n2_im) 
-                                - 2*k1*(k1*k1*f1n1_im + k1*k2*(f1n2_im + f2n1_im) 
-                                + k2*k2*f2n2_im)/Ksq)*e;
-            Hhat1_im[ptr] = (2*f1n1_re*k1 + k2*(f1n2_re + f2n1_re) 
-                                + k1*(f1n1_re + f2n2_re) 
-                                - 2*k1*(k1*k1*f1n1_re + k1*k2*(f1n2_re + f2n1_re) 
-                                + k2*k2*f2n2_re)/Ksq)*e;
+            //j = 2, l = 1
+            Hhat2_re[ptr] = -e*mu*(1/Ksq+0.25/(xi*xi))*(2*k2*k1*(f1n1_re+f2n2_re)+k2*(k1*f1n1_re+k2*f1n2_re)
+                +k2*(k1*f1n1_re+k2*f2n1_re)+k1*(k1*f2n1_re+k2*f2n2_re)+k1*(k1*f1n2_re+k2*f2n2_re)
+                -4*k2*k1*(k1*k1*f1n1_re+k1*k2*f1n2_re+k2*k1*f2n1_re+k2*k2*f2n2_re)/Ksq);
+            Hhat2_im[ptr] = -e*mu*(1/Ksq+0.25/(xi*xi))*(2*k2*k1*(f1n1_im+f2n2_im)+k2*(k1*f1n1_im+k2*f1n2_im)
+                +k2*(k1*f1n1_im+k2*f2n1_im)+k1*(k1*f2n1_im+k2*f2n2_im)+k1*(k1*f1n2_im+k2*f2n2_im)
+                -4*k2*k1*(k1*k1*f1n1_im+k1*k2*f1n2_im+k2*k1*f2n1_im+k2*k2*f2n2_im)/Ksq);
             
-            Hhat2_re[ptr] = -(2*f2n2_im*k2 + k1*(f1n2_im + f2n1_im) 
-                                + k2*(f1n1_im + f2n2_im) 
-                                - 2*k2*(k1*k1*f1n1_im + k1*k2*(f1n2_im + f2n1_im) 
-                                + k2*k2*f2n2_im)/Ksq)*e;
-            Hhat2_im[ptr] = (2*f2n2_re*k2 + k1*(f1n2_re + f2n1_re) 
-                                + k2*(f1n1_re + f2n2_re) 
-                                - 2*k2*(k1*k1*f1n1_re + k1*k2*(f1n2_re + f2n1_re) 
-                                + k2*k2*f2n2_re)/Ksq)*e;            
+            //j = 1, l = 2
+            Hhat3_re[ptr] = -e*mu*(1/Ksq+0.25/(xi*xi))*(2*k1*k2*(f1n1_re+f2n2_re)+k1*(k1*f2n1_re+k2*f2n2_re)
+                +k1*(k1*f1n2_re+k2*f2n2_re)+k2*(k1*f1n1_re+k2*f1n2_re)+k2*(k1*f1n1_re+k2*f2n1_re)
+                -4*k1*k2*(k1*k1*f1n1_re+k1*k2*f1n2_re+k2*k1*f2n1_re+k2*k2*f2n2_re)/Ksq);
+            Hhat3_im[ptr] = -e*mu*(1/Ksq+0.25/(xi*xi))*(2*k1*k2*(f1n1_im+f2n2_im)+k1*(k1*f2n1_im+k2*f2n2_im)
+                +k1*(k1*f1n2_im+k2*f2n2_im)+k2*(k1*f1n1_im+k2*f1n2_im)+k2*(k1*f1n1_im+k2*f2n1_im)
+                -4*k1*k2*(k1*k1*f1n1_im+k1*k2*f1n2_im+k2*k1*f2n1_im+k2*k2*f2n2_im)/Ksq);
+            
+            //j = 2, l = 2
+            Hhat4_re[ptr] = e*((k1*k1*f1n1_re+k1*k2*f1n2_re+k2*k1*f2n1_re+k2*k2*f2n2_re)/Ksq
+                -mu*(1/Ksq+0.25/(xi*xi))*(2*k2*k2*(f1n1_re+f2n2_re)+k2*(k1*f2n1_re+k2*f2n2_re)
+                +k2*(k1*f1n2_re+k2*f2n2_re)+k2*(k1*f2n1_re+k2*f2n2_re)+k2*(k1*f1n2_re+k2*f2n2_re)
+                -4*k2*k2*(k1*k1*f1n1_re+k1*k2*f1n2_re+k2*k1*f2n1_re+k2*k2*f2n2_re)/Ksq));
+            Hhat4_im[ptr] = e*((k1*k1*f1n1_im+k1*k2*f1n2_im+k2*k1*f2n1_im+k2*k2*f2n2_im)/Ksq
+                -mu*(1/Ksq+0.25/(xi*xi))*(2*k2*k2*(f1n1_im+f2n2_im)+k2*(k1*f2n1_im+k2*f2n2_im)
+                +k2*(k1*f1n2_im+k2*f2n2_im)+k2*(k1*f2n1_im+k2*f2n2_im)+k2*(k1*f1n2_im+k2*f2n2_im)
+                -4*k2*k2*(k1*k1*f1n1_im+k1*k2*f1n2_im+k2*k1*f2n1_im+k2*k2*f2n2_im)/Ksq));
+            
         }
         for(int k = 0;k<My/2-1;k++,ptr++) {
             double k2 = 2.0*pi/Ly*(k-My/2+1);
             double Ksq = k1*k1+k2*k2;
             
-            double e = exp(-Ksq*(1-eta)/(4*xi*xi))*(1 + Ksq/(4*xi*xi))/Ksq;
+            double e = exp(-Ksq*(1-eta)/(4*xi*xi));
             
             double f1n1_re = Hhat1_re[ptr];
             double f1n1_im = Hhat1_im[ptr];
@@ -205,31 +221,54 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
             double f2n2_re = Hhat4_re[ptr];
             double f2n2_im = Hhat4_im[ptr];
             
-            Hhat1_re[ptr] = -(2*f1n1_im*k1 + k2*(f1n2_im + f2n1_im) 
-                                + k1*(f1n1_im + f2n2_im) 
-                                - 2*k1*(k1*k1*f1n1_im + k1*k2*(f1n2_im + f2n1_im) 
-                                + k2*k2*f2n2_im)/Ksq)*e;
-            Hhat1_im[ptr] = (2*f1n1_re*k1 + k2*(f1n2_re + f2n1_re) 
-                                + k1*(f1n1_re + f2n2_re) 
-                                - 2*k1*(k1*k1*f1n1_re + k1*k2*(f1n2_re + f2n1_re) 
-                                + k2*k2*f2n2_re)/Ksq)*e;
+            //j = 1, l = 1
+            Hhat1_re[ptr] = e*((k1*k1*f1n1_re+k1*k2*f1n2_re+k2*k1*f2n1_re+k2*k2*f2n2_re)/Ksq
+                -mu*(1/Ksq+0.25/(xi*xi))*(2*k1*k1*(f1n1_re+f2n2_re)+k1*(k1*f1n1_re+k2*f1n2_re)
+                +k1*(k1*f1n1_re+k2*f2n1_re)+k1*(k1*f1n1_re+k2*f1n2_re)+k1*(k1*f1n1_re+k2*f2n1_re)
+                -4*k1*k1*(k1*k1*f1n1_re+k1*k2*f1n2_re+k2*k1*f2n1_re+k2*k2*f2n2_re)/Ksq));
+            Hhat1_im[ptr] = e*((k1*k1*f1n1_im+k1*k2*f1n2_im+k2*k1*f2n1_im+k2*k2*f2n2_im)/Ksq
+                -mu*(1/Ksq+0.25/(xi*xi))*(2*k1*k1*(f1n1_im+f2n2_im)+k1*(k1*f1n1_im+k2*f1n2_im)
+                +k1*(k1*f1n1_im+k2*f2n1_im)+k1*(k1*f1n1_im+k2*f1n2_im)+k1*(k1*f1n1_im+k2*f2n1_im)
+                -4*k1*k1*(k1*k1*f1n1_im+k1*k2*f1n2_im+k2*k1*f2n1_im+k2*k2*f2n2_im)/Ksq));
+
+            //j = 2, l = 1
+            Hhat2_re[ptr] = -e*mu*(1/Ksq+0.25/(xi*xi))*(2*k2*k1*(f1n1_re+f2n2_re)+k2*(k1*f1n1_re+k2*f1n2_re)
+                +k2*(k1*f1n1_re+k2*f2n1_re)+k1*(k1*f2n1_re+k2*f2n2_re)+k1*(k1*f1n2_re+k2*f2n2_re)
+                -4*k2*k1*(k1*k1*f1n1_re+k1*k2*f1n2_re+k2*k1*f2n1_re+k2*k2*f2n2_re)/Ksq);
+            Hhat2_im[ptr] = -e*mu*(1/Ksq+0.25/(xi*xi))*(2*k2*k1*(f1n1_im+f2n2_im)+k2*(k1*f1n1_im+k2*f1n2_im)
+                +k2*(k1*f1n1_im+k2*f2n1_im)+k1*(k1*f2n1_im+k2*f2n2_im)+k1*(k1*f1n2_im+k2*f2n2_im)
+                -4*k2*k1*(k1*k1*f1n1_im+k1*k2*f1n2_im+k2*k1*f2n1_im+k2*k2*f2n2_im)/Ksq);
             
-            Hhat2_re[ptr] = -(2*f2n2_im*k2 + k1*(f1n2_im + f2n1_im) 
-                                + k2*(f1n1_im + f2n2_im) 
-                                - 2*k2*(k1*k1*f1n1_im + k1*k2*(f1n2_im + f2n1_im) 
-                                + k2*k2*f2n2_im)/Ksq)*e;
-            Hhat2_im[ptr] = (2*f2n2_re*k2 + k1*(f1n2_re + f2n1_re) 
-                                + k2*(f1n1_re + f2n2_re) 
-                                - 2*k2*(k1*k1*f1n1_re + k1*k2*(f1n2_re + f2n1_re) 
-                                + k2*k2*f2n2_re)/Ksq)*e;
+            //j = 1, l = 2
+            Hhat3_re[ptr] = -e*mu*(1/Ksq+0.25/(xi*xi))*(2*k1*k2*(f1n1_re+f2n2_re)+k1*(k1*f2n1_re+k2*f2n2_re)
+                +k1*(k1*f1n2_re+k2*f2n2_re)+k2*(k1*f1n1_re+k2*f1n2_re)+k2*(k1*f1n1_re+k2*f2n1_re)
+                -4*k1*k2*(k1*k1*f1n1_re+k1*k2*f1n2_re+k2*k1*f2n1_re+k2*k2*f2n2_re)/Ksq);
+            Hhat3_im[ptr] = -e*mu*(1/Ksq+0.25/(xi*xi))*(2*k1*k2*(f1n1_im+f2n2_im)+k1*(k1*f2n1_im+k2*f2n2_im)
+                +k1*(k1*f1n2_im+k2*f2n2_im)+k2*(k1*f1n1_im+k2*f1n2_im)+k2*(k1*f1n1_im+k2*f2n1_im)
+                -4*k1*k2*(k1*k1*f1n1_im+k1*k2*f1n2_im+k2*k1*f2n1_im+k2*k2*f2n2_im)/Ksq);
+
+            //j = 2, l = 2
+            Hhat4_re[ptr] = e*((k1*k1*f1n1_re+k1*k2*f1n2_re+k2*k1*f2n1_re+k2*k2*f2n2_re)/Ksq
+                -mu*(1/Ksq+0.25/(xi*xi))*(2*k2*k2*(f1n1_re+f2n2_re)+k2*(k1*f2n1_re+k2*f2n2_re)
+                +k2*(k1*f1n2_re+k2*f2n2_re)+k2*(k1*f2n1_re+k2*f2n2_re)+k2*(k1*f1n2_re+k2*f2n2_re)
+                -4*k2*k2*(k1*k1*f1n1_re+k1*k2*f1n2_re+k2*k1*f2n1_re+k2*k2*f2n2_re)/Ksq));
+            Hhat4_im[ptr] = e*((k1*k1*f1n1_im+k1*k2*f1n2_im+k2*k1*f2n1_im+k2*k2*f2n2_im)/Ksq
+                -mu*(1/Ksq+0.25/(xi*xi))*(2*k2*k2*(f1n1_im+f2n2_im)+k2*(k1*f2n1_im+k2*f2n2_im)
+                +k2*(k1*f1n2_im+k2*f2n2_im)+k2*(k1*f2n1_im+k2*f2n2_im)+k2*(k1*f1n2_im+k2*f2n2_im)
+                -4*k2*k2*(k1*k1*f1n1_im+k1*k2*f1n2_im+k2*k1*f2n1_im+k2*k2*f2n2_im)/Ksq));
+            
         }
     }
     
     //Remove the zero frequency term.
     Hhat1_re[0] = 0;
-    Hhat2_re[0] = 0;
     Hhat1_im[0] = 0;
+    Hhat2_re[0] = 0;
     Hhat2_im[0] = 0;
+    Hhat3_re[0] = 0;
+    Hhat3_im[0] = 0;
+    Hhat4_re[0] = 0;
+    Hhat4_im[0] = 0;
     
     //Get rid of the old H arrays. They are no longer needed.
     mxDestroyArray(fft2rhs[0]);
@@ -240,10 +279,14 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
     //Do the inverse 2D FFTs. We use Matlab's inbuilt functions again.
     mexCallMATLAB(1,&fft2rhs[0],1,&fft2lhs[0],"ifft2");
     mexCallMATLAB(1,&fft2rhs[1],1,&fft2lhs[1],"ifft2");
+    mexCallMATLAB(1,&fft2rhs[2],1,&fft2lhs[2],"ifft2");
+    mexCallMATLAB(1,&fft2rhs[3],1,&fft2lhs[3],"ifft2");
     
     //The pointer to the real part. We don't need the imaginary part.
     double* Ht1 = mxGetPr(fft2rhs[0]);
     double* Ht2 = mxGetPr(fft2rhs[1]);
+    double* Ht3 = mxGetPr(fft2rhs[2]);
+    double* Ht4 = mxGetPr(fft2rhs[3]);
     
     //In case the inverse FFTs are purely imaginary. Not likely to happen, 
     //but the program would crash without guarding for this.
@@ -255,10 +298,20 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
         Ht2 = new double[Mx*My];
         memset(Ht2,0,Mx*My*sizeof(double));
     }
+    if(Ht3 == NULL) {
+        Ht3 = new double[Mx*My];
+        memset(Ht3,0,Mx*My*sizeof(double));
+    }
+    if(Ht4 == NULL) {
+        Ht4 = new double[Mx*My];
+        memset(Ht4,0,Mx*My*sizeof(double));
+    }
     
     //Get rid of the Hhat arrays. They are no longer needed.
     mxDestroyArray(fft2lhs[0]);
     mxDestroyArray(fft2lhs[1]);
+    mxDestroyArray(fft2lhs[2]);
+    mxDestroyArray(fft2lhs[3]);
     
     //---------------------------------------------------------------------
     //Step 3 : Evaluating the velocity
@@ -269,14 +322,19 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
     //procedure is fully parallel.
     
     //Create the output matrix.
-    plhs[0] = mxCreateDoubleMatrix(2, Ntar, mxREAL);
+    plhs[0] = mxCreateDoubleMatrix(4, Ntar, mxREAL);
     double* Tk = mxGetPr(plhs[0]);
     
-    Gather(Ht1, 2, 1, e1, ptar, Tk, Ntar, Lx, Ly, xi, w, eta, P, Mx,My, h);
-    Gather(Ht2, 2, 2, e1, ptar, Tk, Ntar, Lx, Ly, xi, w, eta, P, Mx,My, h);
+    Gather(Ht1, 4, 1, e1, ptar, Tk, Ntar, Lx, Ly, xi, w, eta, P, Mx,My, h);
+    Gather(Ht2, 4, 2, e1, ptar, Tk, Ntar, Lx, Ly, xi, w, eta, P, Mx,My, h);
+    Gather(Ht3, 4, 3, e1, ptar, Tk, Ntar, Lx, Ly, xi, w, eta, P, Mx,My, h);
+    Gather(Ht4, 4, 4, e1, ptar, Tk, Ntar, Lx, Ly, xi, w, eta, P, Mx,My, h);
     
     //Clean up
     mxDestroyArray(fft2rhs[0]);
     mxDestroyArray(fft2rhs[1]);
+    mxDestroyArray(fft2rhs[2]);
+    mxDestroyArray(fft2rhs[3]);
+    
     delete e1;
 }

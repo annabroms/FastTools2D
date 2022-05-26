@@ -1,5 +1,5 @@
-function ureal = stokes_dlp_real_ds(xsrc, ysrc, xtar, ytar,...
-                        n1, n2, f1, f2, Lx, Ly, xi)
+function pgrad_real = stokes_slp_pressure_grad_real_ds(xsrc, ysrc, xtar, ytar,...
+                        f1, f2, Lx, Ly, xi)
 % - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 % Evaluates the real space sum of the Stokeslet directly. Considers one
 % periodic replicate box in each direction.
@@ -11,19 +11,16 @@ function ureal = stokes_dlp_real_ds(xsrc, ysrc, xtar, ytar,...
 %       ytar, y component of target points
 %       f1, x component of density function
 %       f2, y component of density function
-%       n1, x component of normal vector at source points
-%       n2, y component of normal vecotr at source points
 %       Lx, the length of the periodic box in the x direction
 %       Ly, the length of the periodic box in the y direction
 %       xi, ewald parameter
 % Output:
-%       ureal, velocity as an 2xN matrix
+%       pressure, velocity as a 1xN matrix
 % - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 Nsrc = length(xsrc);
 Ntar = size(xtar,1);
-ureal1 = zeros(1, Ntar);
-ureal2 = zeros(1, Ntar);
+pgrad_real = zeros(2, Ntar);
 
 for n=1:Nsrc
     
@@ -37,18 +34,15 @@ for n=1:Nsrc
                 xsrc_p = xsrc(n) + jpx*Lx;
                 ysrc_p = ysrc(n) + jpy*Ly;
                 
-                r1 = (xsrc_p - xtar(m));
-                r2 = (ysrc_p - ytar(m));
+                r1 = -(xsrc_p - xtar(m));
+                r2 = -(ysrc_p - ytar(m));
                 r = sqrt(r1^2 + r2^2);
                                
-                % if r == 0, skip
                 if abs(r) < 1e-13
                     continue
                 else
-                    [utmp1, utmp2] =  stokeslet_real_sum(r1,r2,...
-                                n1(n), n2(n), f1(n),f2(n),xi);
-                    ureal1(m) = ureal1(m) + utmp1;
-                    ureal2(m) = ureal2(m) + utmp2;
+                    ptmp =  stokeslet_pressure_grad_real_sum(r1,r2,f1(n),f2(n),xi);
+                    pgrad_real(:,m) = pgrad_real(:,m) + ptmp;
                 end
             end
             
@@ -56,21 +50,15 @@ for n=1:Nsrc
     end
 end
 
-ureal = [ureal1; ureal2] / (4*pi);
+pgrad_real = -pgrad_real / (2*pi);
 
 end
 
-function [u1, u2] = stokeslet_real_sum(r1, r2, n1, n2, f1, f2, xi)
+function pressure = stokeslet_pressure_grad_real_sum(r1, r2, f1, f2, xi)
 
 rdotf = r1*f1 + r2*f2;
-rdotn = r1*n1 + r2*n2;
-ndotf = n1*f1 + n2*f2;
-
 r = sqrt(r1^2 + r2^2);
 
-u1 = exp(-xi^2*r^2)*(-4*r1*rdotn*rdotf/r^4*(1 + xi^2*r^2) +...
-            2*xi^2*(f1*rdotn + n1*rdotf + ndotf*r1));
-u2 = exp(-xi^2*r^2)*(-4*r2*rdotn*rdotf/r^4*(1 + xi^2*r^2) +...
-            2*xi^2*(f2*rdotn + n2*rdotf + ndotf*r2));
+pressure = exp(-xi*xi*r^2)*(([f1;f2] - [r1;r2]*2*xi^2*rdotf)/ r^2 - 2*[r1;r2]*rdotf/r^4);
 
 end
