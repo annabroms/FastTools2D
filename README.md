@@ -17,7 +17,7 @@ To compile the FMM, makefiles are provided. On Linux, all you should need to do 
 	cd ../StokesSLP
 	make
 
-The mex files will be placed in the same directory as the source code.
+The mex files will be placed in the same directory as the source code. **This was tested by Anna using Matlab R2019a (gfortran 6.x?). Compiled files contained in each source folder **
 
 
 On Apple, Matlab no longer supports gfortran so you will have to use the Intel compilers (however see possible workaround [here](https://se.mathworks.com/matlabcentral/answers/338303-how-to-set-up-mex-with-gfortran-on-mac)).
